@@ -1,19 +1,23 @@
 package kde
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"encoding/xml"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
-	"encoding/base64"
-	"encoding/xml"
-	"encoding/json"
+	"net/url"
 
-	"github.com/Fishwaldo/go-yocto/utils"
 	"github.com/Fishwaldo/go-yocto/repo"
+	"github.com/Fishwaldo/go-yocto/utils"
+	"github.com/Fishwaldo/go-yocto/source"
 
-	"github.com/spf13/viper"
+	"golang.org/x/exp/maps"
+
 	"github.com/pterm/pterm"
+	"github.com/spf13/viper"
 	"github.com/xanzy/go-gitlab"
 	"gopkg.in/yaml.v3"
 )
@@ -28,37 +32,13 @@ type Deps struct {
 	Environment interface{} `yaml:"Environment"`
 }
 
-type AsSummary struct {
-	Lang string `xml:"lang,attr"`
-	Summary string `xml:",chardata"`
-}
-
-type AsDescription struct {
-	Lang string `xml:"lang,attr"`
-	Description string `xml:",chardata"`
-}
-
-type AsReleases struct {
-	Version string `xml:"version,attr"`
-	Date string `xml:"date,attr"`
-}
-
-type AppStream struct {
-	Component xml.Name `xml:"component"`
-	Name string `xml:"name"`
-	Summary []AsSummary `xml:"summary"`
-	Description []AsDescription `xml:"description>p"`
-	Releases []AsReleases `xml:"releases>release"`
-}
-
 type Project struct {
-	Name string
+	source.RecipeSource	`yaml:",inline"`
 	ProjectPath string
 	Repoactive bool
 	Repopath string
 	Identifier string
 	Hasrepo bool
-	Description string
 	Source string
 	Bugzilla struct {
 		Product string
@@ -73,34 +53,50 @@ type Project struct {
 	}
 }
 
-type Layer struct {
+type KDEBe struct {
 	MetaDataRepo repo.Repo
 	br map[string]map[string]string
 	pr map[string]Project
+	ready bool
 }
 
 func init() {
 	viper.SetDefault("kdeconfig.release", "@stable");
 	viper.SetDefault("kdeconfig.defaultbranch", "master");
-	viper.SetDefault("kdeconfig.kdegitlaburl", "https://invent.kde.org/api/v4")
+	viper.SetDefault("kdeconfig.kdegitlaburl", "https://invent.kde.org/")
 }
 
-func NewBackend() (l *Layer) {
-	l = &Layer{}
+func NewBackend() (l *KDEBe) {
+	l = &KDEBe{}
 	return l
 }
 
-func (l *Layer) GetName() string {
+func (l *KDEBe) GetName() string {
 	return "kde-invent"
 }
 
-func (l *Layer) Init() {
+func (l *KDEBe) Init() (err error) {
+	utils.Logger.Trace("Initializing KDE Backend")
 	l.MetaDataRepo = repo.Repo{
 		Url: "https://invent.kde.org/sysadmin/repo-metadata",
 		Name: "kde-metadata",
 	}
+	l.ready = true
+	return nil
+}
+
+func (l *KDEBe) Ready() bool {
+	return l.ready
+}
+
+func (l *KDEBe) getDir() (dir string) {
+	dir = utils.Config.BaseDir + "/" + l.MetaDataRepo.Name
+	return dir
+}
+
+func (l *KDEBe) LoadSource() (err error) {
 	utils.Logger.Trace("Checking metadata repo", utils.Logger.Args("repo", l.MetaDataRepo, "layer", l.GetName()))
-	err := l.MetaDataRepo.CheckRepo()
+	err = l.MetaDataRepo.CheckRepo()
 	if (err != nil) {
 		utils.Logger.Info("Cloning repo", utils.Logger.Args("repo", l.MetaDataRepo, "layer", l.GetName()))
 		err := l.MetaDataRepo.CloneRepo()
@@ -109,23 +105,21 @@ func (l *Layer) Init() {
 			os.Exit(-1)
 		}
 	}
-	err = l.ParseMetadata()
+	maps.Clear(l.br) 
+	maps.Clear(l.pr)
+	err = l.parseMetadata()
 	if (err != nil) {
 		utils.Logger.Error("Failed to parse metadata", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
-}
-
-func (l *Layer) GetDir() (dir string) {
-	dir = utils.Config.BaseDir + "/" + l.MetaDataRepo.Name
-	return dir
+	return nil
 }
 
 
-func (l *Layer) ParseMetadata() (err error) {
+func (l *KDEBe) parseMetadata() (err error) {
 	l.pr = make(map[string]Project)
-	utils.Logger.Info("Parsing metadata", utils.Logger.Args("layer", l.Name))
-	brfile, err := ioutil.ReadFile(l.GetDir() + "/branch-rules.yml")
+	utils.Logger.Trace("Parsing metadata", utils.Logger.Args("layer", l.GetName()))
+	brfile, err := ioutil.ReadFile(l.getDir() + "/branch-rules.yml")
 	if err != nil {
 		utils.Logger.Error("Failed to read branch-rules.yaml", utils.Logger.Args("error", err))
 		os.Exit(-1)
@@ -140,18 +134,18 @@ func (l *Layer) ParseMetadata() (err error) {
 	}
 	/* make sure we have a valid release */
 	if _, ok := l.br[utils.Config.KDEConfig.Release]; !ok {
-		utils.Logger.Error("Invalid release", utils.Logger.Args("release", Config.KDEConfig.Release))
+		utils.Logger.Error("Invalid release", utils.Logger.Args("release", utils.Config.KDEConfig.Release))
 		os.Exit(-1)
 	}
 
-	gl, err := gitlab.NewClient(utils.Config.KDEConfig.AccessToken, gitlab.WithBaseURL(utils.Config.KDEConfig.KDEGitLabURL))
+	gl, err := gitlab.NewClient(utils.Config.KDEConfig.AccessToken, gitlab.WithBaseURL(utils.Config.KDEConfig.KDEGitLabURL+"/api/v4"))
 	if err != nil {
 		utils.Logger.Error("Failed to create GitLab client", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
 
 	/* now parse the directory */
-	files := findmetdata(l.GetDir())
+	files := findmetdata(l.getDir())
 	p, _ := pterm.DefaultProgressbar.WithTotal(len(files)).WithTitle("Parsing Metadata...").Start()
 	for i := 0; i < p.Total; i++ {
 		p.Increment()
@@ -169,6 +163,8 @@ func (l *Layer) ParseMetadata() (err error) {
 			continue
 		}
 		data.MetaData.Branch = utils.Config.KDEConfig.DefaultBranch
+		data.RecipeSource.Backend = l.GetName()
+		data.RecipeSource.Url, _ = url.JoinPath(utils.Config.KDEConfig.KDEGitLabURL,  data.Repopath)
 		/* find out which branch this is in... */
 		for project, branch := range l.br[utils.Config.KDEConfig.Release] {
 			ok, _ := filepath.Match(project, data.Repopath)
@@ -230,23 +226,77 @@ func (l *Layer) ParseMetadata() (err error) {
 			utils.Logger.Error("Duplicate identifier", utils.Logger.Args("identifier", data.Identifier))
 			continue
 		}
-		data.Source = l.Name
+		data.Source = l.GetName()
 		l.pr[data.Identifier] = data
 	}
-	utils.Logger.Trace("Parsed metadata", utils.Logger.Args("layers", len(files)));
 
 	cache, err := json.Marshal(l.pr)
 	if err != nil {
 		utils.Logger.Error("Failed to marshal metadata", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
-	err = ioutil.WriteFile(utils.Config.BaseDir + "/metadata.json", cache, 0644)
+	err = ioutil.WriteFile(utils.Config.BaseDir + "/" + l.GetName() + "-cache.json", cache, 0644)
 	if err != nil {
 		utils.Logger.Error("Failed to write metadata", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
+	brcache, err := json.Marshal(l.br)
+	if err != nil {
+		utils.Logger.Error("Failed to marshal branch metadata", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+	err = ioutil.WriteFile(utils.Config.BaseDir + "/" + l.GetName() + "-branch-cache.json", brcache, 0644)
+	if err != nil {
+		utils.Logger.Error("Failed to write branch metadata", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+
+	utils.Logger.Trace("Parsed metadata", utils.Logger.Args("layers", len(l.pr), "branches", len(l.br)));
+
 
 	return nil
+}
+
+func (l *KDEBe) LoadCache() (err error) {
+	utils.Logger.Trace("Loading KDE Cache")
+	cache, err := ioutil.ReadFile(utils.Config.BaseDir + "/" + l.GetName() + "-cache.json")
+	if err != nil {
+		utils.Logger.Error("Failed to read cache", utils.Logger.Args("error", err))
+	} else {
+		err = json.Unmarshal(cache, &l.pr)
+		if err != nil {
+			utils.Logger.Error("Failed to unmarshal cache", utils.Logger.Args("error", err))
+		}
+	}
+	brcache, err := ioutil.ReadFile(utils.Config.BaseDir + "/" + l.GetName() + "-branch-cache.json")
+	if err != nil {
+		utils.Logger.Error("Failed to read branch cache", utils.Logger.Args("error", err))
+	} else {
+		err = json.Unmarshal(brcache, &l.br)
+		if err != nil {
+			utils.Logger.Error("Failed to unmarshal branch cache", utils.Logger.Args("error", err))
+		}
+	}
+
+	utils.Logger.Trace("KDE Cache Loaded", utils.Logger.Args("layers", len(l.pr), "branches", len(l.br)))
+	return nil
+}
+
+func (l *KDEBe) SearchSource(keywords string) (source []source.RecipeSource, err error) {
+	utils.Logger.Trace("Searching KDE Source", utils.Logger.Args("keyword", keywords))
+
+	p, _ := pterm.DefaultProgressbar.WithTotal(len(l.pr)).WithTitle("Searching KDE...").Start()
+
+	for _, data := range l.pr {
+		p.Increment()
+		if strings.Contains(strings.ToLower(data.Name), strings.ToLower(keywords)) {
+			source = append(source, data.RecipeSource)
+		}
+		if strings.Contains(strings.ToLower(data.Description), strings.ToLower(keywords)) {
+			source = append(source, data.RecipeSource)
+		}
+	}
+	return source, nil;
 }
 
 func findmetdata(path string) (files []string) {

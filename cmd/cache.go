@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
+	"github.com/Fishwaldo/go-yocto/cmd/cache"
 )
 
 // cacheCmd represents the cache command
@@ -22,6 +23,7 @@ var cacheCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(cacheCmd)
+	cacheCmd.AddCommand(cmdCache.UpdateCmd)
 
 	// Here you will define your flags and configuration settings.
 

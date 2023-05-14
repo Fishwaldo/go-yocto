@@ -29,7 +29,7 @@ func (c *configData) InitConfig() (err error) {
 		Logger.Error("Failed to unmarshal config", Logger.Args("error", err))
 	}
 	if _, err = os.Stat(c.BaseDir); os.IsNotExist(err) {
-		Logger.Error("BaseDir does not exist", Logger.Args("error", err))
+		Logger.Error("BaseDir does not exist", Logger.Args("error", err, "basedir", c.BaseDir))
 		os.Exit(-1)
 	}
 	return err
