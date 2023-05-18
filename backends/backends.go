@@ -2,7 +2,6 @@ package backends
 
 import (
 	"github.com/Fishwaldo/go-yocto/backends/kde"
-	"github.com/Fishwaldo/go-yocto/backends/appstream"
 	"github.com/Fishwaldo/go-yocto/source"
 	"github.com/Fishwaldo/go-yocto/utils"
 
@@ -23,7 +22,6 @@ var Backends map[string]Backend
 func init() {
 	Backends = make(map[string]Backend)
 	Backends["kde"] = kde.NewBackend()
-	Backends["appstream"] = appstream.NewBackend()
 }
 
 func Init() (err error) {

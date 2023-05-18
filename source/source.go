@@ -6,4 +6,6 @@ type RecipeSource struct {
 	Url string
 	Backend string
 	BackendID string
+	MetaData map[string]map[string]interface{}
 }
+

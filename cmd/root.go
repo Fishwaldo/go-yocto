@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/Fishwaldo/go-yocto/backends"
+	"github.com/Fishwaldo/go-yocto/parsers"
 	"github.com/Fishwaldo/go-yocto/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -59,6 +60,10 @@ func initConfig() {
 	}
 	if err := backends.Init(); err != nil {
 		utils.Logger.Error("Failed to initialize Backends", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+	if err := parsers.InitParsers(); err != nil {
+		utils.Logger.Error("Failed to initialize Parsers", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
 	if err := backends.LoadCache(); err != nil {

@@ -3,16 +3,17 @@ package kde
 import (
 	"encoding/base64"
 	"encoding/json"
-	"encoding/xml"
+
 	"io/ioutil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"net/url"
 
+	"github.com/Fishwaldo/go-yocto/parsers"
 	"github.com/Fishwaldo/go-yocto/repo"
-	"github.com/Fishwaldo/go-yocto/utils"
 	"github.com/Fishwaldo/go-yocto/source"
+	"github.com/Fishwaldo/go-yocto/utils"
 
 	"golang.org/x/exp/maps"
 
@@ -46,11 +47,6 @@ type Project struct {
 		DNUlegacyproduct string `yaml:"__do_not_use-legacy-product"`
 	}
 	Topics []string
-	MetaData struct {
-		Branch string
-		Dependencies Deps
-		AppStream AppStream
-	}
 }
 
 type KDEBe struct {
@@ -162,21 +158,23 @@ func (l *KDEBe) parseMetadata() (err error) {
 			utils.Logger.Error("Failed to decode metadata file", utils.Logger.Args("file", files[i], "error", err))
 			continue
 		}
-		data.MetaData.Branch = utils.Config.KDEConfig.DefaultBranch
+		data.MetaData = make(map[string]map[string]interface{})
+		data.MetaData["branch-rules"] = make(map[string]interface{})
+		data.MetaData["branch-rules"]["branch"] = utils.Config.KDEConfig.DefaultBranch
 		data.RecipeSource.Backend = l.GetName()
 		data.RecipeSource.Url, _ = url.JoinPath(utils.Config.KDEConfig.KDEGitLabURL,  data.Repopath)
 		/* find out which branch this is in... */
 		for project, branch := range l.br[utils.Config.KDEConfig.Release] {
 			ok, _ := filepath.Match(project, data.Repopath)
 			if ok {
-				data.MetaData.Branch = branch
+				data.MetaData["branch-rules"]["branch"] = branch
 				break
 			}
 		}
 
 		/* get the .kde-ci.yml for dependencies */
 		gf := &gitlab.GetFileOptions{
-			Ref: gitlab.String(data.MetaData.Branch),
+			Ref: gitlab.String(data.MetaData["branch-rules"]["branch"].(string)),
 		}
 		f, res, err := gl.RepositoryFiles.GetFile(data.Repopath, ".kde-ci.yml", gf)
 		if err != nil {
@@ -196,7 +194,8 @@ func (l *KDEBe) parseMetadata() (err error) {
 				if err != nil {
 					utils.Logger.Error("Failed to unmarshal .kde-ci.yml", utils.Logger.Args("error", err, "project", data.Repopath))
 				} else {
-					data.MetaData.Dependencies = deps
+					data.MetaData["kde-ci"] = make(map[string]interface{})
+					data.MetaData["kde-ci"]["dependencies"] = deps
 				}
 			}
 		}
@@ -207,18 +206,19 @@ func (l *KDEBe) parseMetadata() (err error) {
 				utils.Logger.Error("Failed to get appstream", utils.Logger.Args("error", err))
 			}
 		} else {
-			/* now parse the appstream */
+			/* appstream */
 			content, err := base64.StdEncoding.DecodeString(f.Content)
 			if err != nil {
 				utils.Logger.Error("Failed to decode appstream", utils.Logger.Args("error", err))
 			} else {
-				var as AppStream
-				err = xml.Unmarshal(content, &as)
-				if err != nil {
-					utils.Logger.Error("Failed to unmarshal appstream", utils.Logger.Args("error", err, "project", data.Repopath))
+				if as, err := parsers.GetParser("appstream"); err != nil {
+					utils.Logger.Error("Failed to get appstream parser", utils.Logger.Args("error", err))
 				} else {
-					data.MetaData.AppStream = as
+					if data.MetaData["appstream"], err = as.Parse(strings.NewReader(string(content))); err != nil {
+						utils.Logger.Error("Failed to parse appstream", utils.Logger.Args("error", err))
+					}
 				}
+
 			}
 		}
 
