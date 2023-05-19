@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2023 Justin Hammond <justin@dynam.ac>
+#
+# SPDX-License-Identifier: MIT
+
+DESCRIPTION = "{{.Description}}"
+SUMMARY = "{{.Summary}}"
+HOMEPAGE = "{{.Url}}"
+LICENSE = "{{block "Licenses" .Licenses}} {{join . " & "}}{{end}}"
+
+{{block "Inherits" .Inherits}}{{"\n"}}{{range .}}{{println "inherit" .}}{{end}}{{end}}
+
+DEPENDS = " \
+{{block "Depends" .Depends }}{{range .}}{{print "    " . }} \{{println}}{{end}}{{end}}"
+
+
+KF5_REUSE_LICENSECHECK_ENABLED="1"
+

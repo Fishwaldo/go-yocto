@@ -1,10 +1,11 @@
 package backends
 
 import (
+	"errors"
+
 	"github.com/Fishwaldo/go-yocto/backends/kde"
 	"github.com/Fishwaldo/go-yocto/source"
 	"github.com/Fishwaldo/go-yocto/utils"
-
 )
 
 
@@ -13,7 +14,8 @@ type Backend interface {
 	Init() error
 	LoadCache() error
 	LoadSource() error
-	SearchSource(keyword string) (source []source.RecipeSource, err error)	
+	SearchSource(keyword string) (source []source.RecipeSource, err error)
+	GetRecipe(identifier string) (*source.RecipeSource, error)	
 	Ready() bool
 }
 
@@ -77,4 +79,19 @@ func SearchSource(be string, keyword string) (sources []source.RecipeSource, err
 		}
 	}
 	return sources, nil
+}
+
+func GetRecipe(be string, identifier string) (source *source.RecipeSource, err error) {
+	utils.Logger.Trace("Getting Recipe", utils.Logger.Args("backend", be, "identifier", identifier))
+	if be, ok := Backends[be]; ok {
+		if source, err := be.GetRecipe(identifier); err != nil {
+			utils.Logger.Error("Failed to Get Recipe", utils.Logger.Args("backend", be.GetName(), "identifier", identifier, "error", err))
+			return nil, errors.New("Failed to Get Recipe")
+		} else {
+			return source, nil
+		}
+	} else {
+		utils.Logger.Error("Backend not found", utils.Logger.Args("backend", be))
+	}
+	return nil, errors.New("Backend not found")
 }

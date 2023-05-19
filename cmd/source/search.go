@@ -20,7 +20,7 @@ var SearchCmd = &cobra.Command{
 		if err == nil {
 			td := pterm.TableData{{"Name", "Description", "Backend", "Url"}}
 			for _, source := range sources {
-				td = append(td, []string{source.Name, source.Description, source.Backend, source.Url})
+				td = append(td, []string{source.Name, source.Description, source.BackendID, source.Url})
 			}
 			pterm.DefaultTable.WithHasHeader().WithData(
 				td,

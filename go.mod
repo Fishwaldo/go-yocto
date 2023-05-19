@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/Masterminds/semver/v3 v3.2.1
+	github.com/davecgh/go-spew v1.1.1
 	github.com/go-git/go-git/v5 v5.6.1
 	github.com/pterm/pterm v0.12.60
 	github.com/spf13/cobra v1.7.0

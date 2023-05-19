@@ -2,10 +2,18 @@ package source
 
 type RecipeSource struct {
 	Name string
+	Identifier string
 	Description string
+	Summary string
+	Version string
 	Url string
-	Backend string
+	Section string
 	BackendID string
-	MetaData map[string]map[string]interface{}
+	Inherits []string
+	Depends []string
+	SrcURI string
+	SrcSHA256 string
+	Licenses []string
+	Location string
 }
 

@@ -1,14 +1,19 @@
 package kde
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
-
+	"errors"
 	"io/ioutil"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	//	"fmt"
 
 	"github.com/Fishwaldo/go-yocto/parsers"
 	"github.com/Fishwaldo/go-yocto/repo"
@@ -21,24 +26,14 @@ import (
 	"github.com/spf13/viper"
 	"github.com/xanzy/go-gitlab"
 	"gopkg.in/yaml.v3"
+	// "github.com/davecgh/go-spew/spew"
 )
-
-
-type Deps struct {
-	Dependencies []struct {
-		On []string
-		Require map[string]string
-	} `yaml:"Dependencies"`
-	Options interface{} `yaml:"Options"`
-	Environment interface{} `yaml:"Environment"`
-}
 
 type Project struct {
 	source.RecipeSource	`yaml:",inline"`
 	ProjectPath string
 	Repoactive bool
 	Repopath string
-	Identifier string
 	Hasrepo bool
 	Source string
 	Bugzilla struct {
@@ -47,12 +42,14 @@ type Project struct {
 		DNUlegacyproduct string `yaml:"__do_not_use-legacy-product"`
 	}
 	Topics []string
+	MetaData map[string]map[string]interface{}
 }
 
 type KDEBe struct {
 	MetaDataRepo repo.Repo
 	br map[string]map[string]string
 	pr map[string]Project
+	dep map[string][]string
 	ready bool
 }
 
@@ -103,6 +100,7 @@ func (l *KDEBe) LoadSource() (err error) {
 	}
 	maps.Clear(l.br) 
 	maps.Clear(l.pr)
+	maps.Clear(l.dep)
 	err = l.parseMetadata()
 	if (err != nil) {
 		utils.Logger.Error("Failed to parse metadata", utils.Logger.Args("error", err))
@@ -113,15 +111,17 @@ func (l *KDEBe) LoadSource() (err error) {
 
 
 func (l *KDEBe) parseMetadata() (err error) {
-	l.pr = make(map[string]Project)
 	utils.Logger.Trace("Parsing metadata", utils.Logger.Args("layer", l.GetName()))
+
+	l.pr = make(map[string]Project)
+	l.br = make(map[string]map[string]string)
+	l.dep = make(map[string][]string)
+
 	brfile, err := ioutil.ReadFile(l.getDir() + "/branch-rules.yml")
 	if err != nil {
 		utils.Logger.Error("Failed to read branch-rules.yaml", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
-
-	l.br = make(map[string]map[string]string)
 
 	err = yaml.Unmarshal(brfile, &l.br)
 	if err != nil {
@@ -139,6 +139,22 @@ func (l *KDEBe) parseMetadata() (err error) {
 		utils.Logger.Error("Failed to create GitLab client", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
+
+	/* parse dependancy file dependencies/dependency-data-kf5-qt5 */
+	depsfile, err := os.Open(l.getDir() + "/dependencies/dependency-data-kf5-qt5")
+	if err != nil {
+		utils.Logger.Error("Failed to open dependency file", utils.Logger.Args("error", err))
+	}
+	defer depsfile.Close()
+	scanner := bufio.NewScanner(depsfile)
+	var entry = regexp.MustCompile(`^(.*):.(.*)$`)
+	for scanner.Scan() {
+		if entry.MatchString(scanner.Text()) {
+			match := entry.FindStringSubmatch(scanner.Text())
+			l.dep[match[1]] = append(l.dep[match[1]], match[2])
+		}
+	}
+
 
 	/* now parse the directory */
 	files := findmetdata(l.getDir())
@@ -161,7 +177,7 @@ func (l *KDEBe) parseMetadata() (err error) {
 		data.MetaData = make(map[string]map[string]interface{})
 		data.MetaData["branch-rules"] = make(map[string]interface{})
 		data.MetaData["branch-rules"]["branch"] = utils.Config.KDEConfig.DefaultBranch
-		data.RecipeSource.Backend = l.GetName()
+		data.RecipeSource.BackendID = l.GetName()
 		data.RecipeSource.Url, _ = url.JoinPath(utils.Config.KDEConfig.KDEGitLabURL,  data.Repopath)
 		/* find out which branch this is in... */
 		for project, branch := range l.br[utils.Config.KDEConfig.Release] {
@@ -171,36 +187,11 @@ func (l *KDEBe) parseMetadata() (err error) {
 				break
 			}
 		}
-
-		/* get the .kde-ci.yml for dependencies */
 		gf := &gitlab.GetFileOptions{
 			Ref: gitlab.String(data.MetaData["branch-rules"]["branch"].(string)),
 		}
-		f, res, err := gl.RepositoryFiles.GetFile(data.Repopath, ".kde-ci.yml", gf)
-		if err != nil {
-			if res.StatusCode != 404 {
-				utils.Logger.Error("Failed to get .kde-ci.yml", utils.Logger.Args("error", err))
-			}
-		} else { 
-			/* now parse the .kde-ci.yml */
-			var deps Deps
-			content, err := base64.StdEncoding.DecodeString(f.Content)
-			if err != nil {
-				utils.Logger.Error("Failed to decode .kde-ci.yml", utils.Logger.Args("error", err))
-			} else {
-				ymldeps := yaml.NewDecoder(strings.NewReader(string(content)))
-				ymldeps.KnownFields(false);
-				err = ymldeps.Decode(&deps)
-				if err != nil {
-					utils.Logger.Error("Failed to unmarshal .kde-ci.yml", utils.Logger.Args("error", err, "project", data.Repopath))
-				} else {
-					data.MetaData["kde-ci"] = make(map[string]interface{})
-					data.MetaData["kde-ci"]["dependencies"] = deps
-				}
-			}
-		}
 		/* now get appstream if it exists */ 
-		f, res, err = gl.RepositoryFiles.GetFile(data.Repopath, "org.kde." + data.Identifier + ".appdata.xml", gf)
+		f, res, err := gl.RepositoryFiles.GetFile(data.Repopath, "org.kde." + data.Identifier + ".appdata.xml", gf)
 		if err != nil {
 			if res.StatusCode != 404 {
 				utils.Logger.Error("Failed to get appstream", utils.Logger.Args("error", err))
@@ -240,6 +231,17 @@ func (l *KDEBe) parseMetadata() (err error) {
 		utils.Logger.Error("Failed to write metadata", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
+	depcache, err := json.Marshal(l.dep)
+	if err != nil {
+		utils.Logger.Error("Failed to marshal dependancy metadata", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+	err = ioutil.WriteFile(utils.Config.BaseDir + "/" + l.GetName() + "-dep-cache.json", depcache, 0644)
+	if err != nil {
+		utils.Logger.Error("Failed to write dependancy metadata", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+
 	brcache, err := json.Marshal(l.br)
 	if err != nil {
 		utils.Logger.Error("Failed to marshal branch metadata", utils.Logger.Args("error", err))
@@ -248,6 +250,10 @@ func (l *KDEBe) parseMetadata() (err error) {
 	err = ioutil.WriteFile(utils.Config.BaseDir + "/" + l.GetName() + "-branch-cache.json", brcache, 0644)
 	if err != nil {
 		utils.Logger.Error("Failed to write branch metadata", utils.Logger.Args("error", err))
+		os.Exit(-1)
+	}
+	if err := RefreshDownloadLocations(); err != nil {
+		utils.Logger.Error("Failed to refresh download locations", utils.Logger.Args("error", err))
 		os.Exit(-1)
 	}
 
@@ -268,6 +274,15 @@ func (l *KDEBe) LoadCache() (err error) {
 			utils.Logger.Error("Failed to unmarshal cache", utils.Logger.Args("error", err))
 		}
 	}
+	depcache, err := ioutil.ReadFile(utils.Config.BaseDir + "/" + l.GetName() + "-dep-cache.json")
+	if err != nil {
+		utils.Logger.Error("Failed to read dependancy cache", utils.Logger.Args("error", err))
+	} else {
+		err = json.Unmarshal(depcache, &l.dep)
+		if err != nil {
+			utils.Logger.Error("Failed to unmarshal dependancy cache", utils.Logger.Args("error", err))
+		}
+	}
 	brcache, err := ioutil.ReadFile(utils.Config.BaseDir + "/" + l.GetName() + "-branch-cache.json")
 	if err != nil {
 		utils.Logger.Error("Failed to read branch cache", utils.Logger.Args("error", err))
@@ -277,7 +292,9 @@ func (l *KDEBe) LoadCache() (err error) {
 			utils.Logger.Error("Failed to unmarshal branch cache", utils.Logger.Args("error", err))
 		}
 	}
-
+	if err := LoadDownloadLocationsCache(); err != nil {
+		utils.Logger.Error("Failed to load download locations cache", utils.Logger.Args("error", err))
+	}
 	utils.Logger.Trace("KDE Cache Loaded", utils.Logger.Args("layers", len(l.pr), "branches", len(l.br)))
 	return nil
 }
@@ -312,4 +329,66 @@ func findmetdata(path string) (files []string) {
         panic(err)
     }
     return files
+}
+
+func (l *KDEBe) GetRecipe(identifier string) (*source.RecipeSource, error) {
+	utils.Logger.Trace("Getting KDE Recipe", utils.Logger.Args("recipe", identifier))
+	if recipe, ok := l.pr[identifier]; ok {
+
+		/* get the summary if it exists from appstream */
+		if as, ok := recipe.MetaData["appstream"]; ok {
+			if summary, ok := as["summary"]; ok {
+				recipe.Summary = summary.(string)
+			}
+		} else {
+			result, _ := pterm.DefaultInteractiveTextInput.WithMultiLine(false).Show("Summary")
+			recipe.Summary = strings.TrimSpace(result)
+		}
+		/* get version from Appstream */
+		if as, ok := recipe.MetaData["appstream"]; ok {
+			if version, ok := as["version"]; ok {
+				recipe.Version = version.(string)
+			}
+		} else {
+			result, _ := pterm.DefaultInteractiveTextInput.WithMultiLine(false).Show("Version Number")
+			recipe.Version = strings.TrimSpace(result)
+		}
+		if dlpath, err := GetDownloadPath(recipe.Identifier, recipe.Version); err != nil {
+			utils.Logger.Error("Failed to get download path", utils.Logger.Args("error", err))
+			return nil, err
+		} else {
+			recipe.SrcURI = dlpath
+		}
+		if (len(recipe.SrcURI) > 0) {
+			if sha, err := GetDownloadSHA(recipe.Identifier, recipe.Version); err != nil {
+				utils.Logger.Error("Failed to get download SHA", utils.Logger.Args("error", err))
+			} else {
+				recipe.SrcSHA256 = sha
+			}
+		}
+		licenses, err := GetLicense(recipe)
+		if err != nil {
+			utils.Logger.Error("Failed to get License", utils.Logger.Args("error", err))
+		} else {
+			recipe.Licenses = licenses
+		}
+
+		inherits, err := GetInherits(recipe, l.dep)
+		if err != nil {
+			utils.Logger.Error("Failed to get Inherits", utils.Logger.Args("error", err))
+		} else {
+			recipe.Inherits = inherits
+		}
+
+		depends, err := GetDepends(recipe, l.dep)
+		if err != nil {
+			utils.Logger.Error("Failed to get Inherits", utils.Logger.Args("error", err))
+		} else {
+			recipe.Depends = depends
+		}
+		recipe.Section = path.Dir(recipe.Repopath)
+
+		return &recipe.RecipeSource, nil
+	}
+	return nil, errors.New("Recipe Not Found")
 }
